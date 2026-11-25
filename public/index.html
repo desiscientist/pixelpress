@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pixelpress: convert and compress images</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23e4572e'/><rect x='8' y='8' width='9' height='9' fill='white'/><rect x='17' y='17' width='7' height='7' fill='white' opacity='.7'/></svg>" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Pixelpress home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      pixelpress
+    </a>
+    <nav class="tabs" role="tablist" aria-label="Tools">
+      <button class="tab is-active" role="tab" aria-selected="true" data-tool="convert">Convert</button>
+      <button class="tab" role="tab" aria-selected="false" data-tool="compress">Compress</button>
+      <button class="tab" role="tab" aria-selected="false" data-tool="resize">Resize</button>
+    </nav>
+  </header>
+
+  <main class="page">
+    <section class="intro">
+      <h1 id="tool-title">Convert images</h1>
+      <p id="tool-desc">Change JPG, PNG, WebP, AVIF, GIF, TIFF and SVG files into another format. Add one image or a whole batch.</p>
+    </section>
+
+    <!-- Step 1: pick files -->
+    <input id="file-input" class="visually-hidden" type="file" multiple
+      accept="image/jpeg,image/png,image/webp,image/avif,image/gif,image/tiff,image/svg+xml,.jpg,.jpeg,.png,.webp,.avif,.gif,.tif,.tiff,.svg" />
+    <label id="dropzone" class="dropzone" for="file-input">
+      <span class="dz-button">Select images</span>
+      <span class="dz-hint">or drop them here. Up to 25 MB each.</span>
+    </label>
+
+    <!-- Step 2 & 3: files + options + results -->
+    <section id="workspace" class="workspace" hidden>
+      <div class="files-col">
+        <div class="files-head">
+          <h2><span id="file-count">0</span> images</h2>
+          <div class="files-actions">
+            <label class="link-btn" for="file-input">Add more</label>
+            <button id="clear-btn" class="link-btn" type="button">Clear all</button>
+          </div>
+        </div>
+        <ul id="file-list" class="file-list"></ul>
+      </div>
+
+      <aside class="options" aria-label="Options">
+        <!-- Convert options -->
+        <div class="opt-group" data-for="convert">
+          <h3>Convert to</h3>
+          <div class="seg" id="format-picker" role="radiogroup" aria-label="Output format">
+            <button type="button" role="radio" data-format="jpeg" aria-checked="true" class="is-on">JPG</button>
+            <button type="button" role="radio" data-format="png" aria-checked="false">PNG</button>
+            <button type="button" role="radio" data-format="webp" aria-checked="false">WebP</button>
+            <button type="button" role="radio" data-format="avif" aria-checked="false">AVIF</button>
+            <button type="button" role="radio" data-format="gif" aria-checked="false">GIF</button>
+            <button type="button" role="radio" data-format="tiff" aria-checked="false">TIFF</button>
+          </div>
+          <p class="opt-note" id="format-note"></p>
+        </div>
+
+        <div class="opt-group" data-for="convert" id="convert-quality-group">
+          <div class="slider-head">
+            <h3><label for="convert-quality">Quality</label></h3>
+            <output id="convert-quality-out" for="convert-quality">90</output>
+          </div>
+          <input type="range" id="convert-quality" min="10" max="100" value="90" />
+        </div>
+
+        <div class="opt-group" data-for="convert" id="bg-group">
+          <h3><label for="bg-color">Background for transparent areas</label></h3>
+          <div class="color-row">
+            <input type="color" id="bg-color" value="#ffffff" />
+            <span class="opt-note">JPG has no transparency, so transparent pixels are filled with this colour.</span>
+          </div>
+        </div>
+
+        <!-- Compress options -->
+        <div class="opt-group" data-for="compress" hidden>
+          <h3>Compression level</h3>
+          <div class="presets" id="preset-picker" role="radiogroup" aria-label="Compression level">
+            <button type="button" role="radio" data-level="light" aria-checked="false">
+              <strong>Light</strong><span>Looks identical, even zoomed in</span>
+            </button>
+            <button type="button" role="radio" data-level="recommended" aria-checked="true" class="is-on">
+              <strong>Recommended</strong><span>No visible difference at normal size</span>
+            </button>
+            <button type="button" role="radio" data-level="strong" aria-checked="false">
+              <strong>Strong</strong><span>Smaller files, slight softening up close</span>
+            </button>
+            <button type="button" role="radio" data-level="custom" aria-checked="false">
+              <strong>Custom</strong><span>Pick an exact quality yourself</span>
+            </button>
+          </div>
+          <p class="opt-note">Each image is checked so it never drops below the chosen level. Images that can't shrink without visible loss are left as they are.</p>
+          <div id="custom-quality" hidden>
+            <div class="slider-head">
+              <label for="compress-quality">Quality</label>
+              <output id="compress-quality-out" for="compress-quality">80</output>
+            </div>
+            <input type="range" id="compress-quality" min="10" max="100" value="80" />
+          </div>
+        </div>
+
+        <div class="opt-group" data-for="compress" hidden>
+          <h3><label for="compress-format">Output format</label></h3>
+          <select id="compress-format">
+            <option value="original">Keep original format</option>
+            <option value="webp">WebP</option>
+            <option value="avif">AVIF</option>
+            <option value="jpeg">JPG</option>
+          </select>
+        </div>
+
+        <div class="opt-group" data-for="compress" hidden>
+          <h3><label for="max-width">Resize (optional)</label></h3>
+          <div class="resize-row">
+            <input type="number" id="max-width" min="1" max="20000" placeholder="Max width" inputmode="numeric" />
+            <span>&times;</span>
+            <input type="number" id="max-height" min="1" max="20000" placeholder="Max height" inputmode="numeric" />
+            <span class="unit">px</span>
+          </div>
+          <p class="opt-note">Images are shrunk to fit inside these bounds and never enlarged.</p>
+        </div>
+
+        <!-- Resize options -->
+        <div class="opt-group" data-for="resize" hidden>
+          <h3>Resize</h3>
+          <div class="seg seg-2" id="resize-by" role="radiogroup" aria-label="Resize by">
+            <button type="button" role="radio" data-by="pixels" aria-checked="true" class="is-on">By pixels</button>
+            <button type="button" role="radio" data-by="percent" aria-checked="false">By percentage</button>
+          </div>
+        </div>
+
+        <div class="opt-group" data-for="resize" id="resize-pixels" hidden>
+          <div class="dim-row">
+            <label class="dim">
+              <span>Width</span>
+              <input type="number" id="resize-width" min="1" max="10000" inputmode="numeric" placeholder="Auto" />
+            </label>
+            <span class="dim-x" aria-hidden="true">&times;</span>
+            <label class="dim">
+              <span>Height</span>
+              <input type="number" id="resize-height" min="1" max="10000" inputmode="numeric" placeholder="Auto" />
+            </label>
+            <span class="unit">px</span>
+          </div>
+
+          <h3 class="sub-head">Fit</h3>
+          <div class="presets" id="resize-fit" role="radiogroup" aria-label="Fit">
+            <button type="button" role="radio" data-fit="keep" aria-checked="true" class="is-on">
+              <strong>Keep proportions</strong><span>Fits inside the size, never distorted</span>
+            </button>
+            <button type="button" role="radio" data-fit="crop" aria-checked="false">
+              <strong>Crop to exact size</strong><span>Fills the size and trims the edges, keeping the main subject</span>
+            </button>
+            <button type="button" role="radio" data-fit="stretch" aria-checked="false">
+              <strong>Stretch to exact size</strong><span>Fills the size and may distort the image</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="opt-group" data-for="resize" id="resize-percent" hidden>
+          <div class="seg" id="percent-picker" role="radiogroup" aria-label="Percentage">
+            <button type="button" role="radio" data-percent="25" aria-checked="false">25%</button>
+            <button type="button" role="radio" data-percent="50" aria-checked="true" class="is-on">50%</button>
+            <button type="button" role="radio" data-percent="75" aria-checked="false">75%</button>
+          </div>
+          <label class="inline-field">
+            <span>Custom</span>
+            <input type="number" id="resize-percent-input" min="1" max="400" value="50" inputmode="numeric" />
+            <span class="unit">%</span>
+          </label>
+        </div>
+
+        <div class="opt-group" data-for="resize" hidden>
+          <label class="check">
+            <input type="checkbox" id="resize-no-enlarge" checked />
+            <span>Don't enlarge images that are already smaller</span>
+          </label>
+        </div>
+
+        <div class="opt-group" data-for="resize" hidden>
+          <h3><label for="resize-format">Output format</label></h3>
+          <select id="resize-format">
+            <option value="original">Keep original format</option>
+            <option value="jpeg">JPG</option>
+            <option value="png">PNG</option>
+            <option value="webp">WebP</option>
+            <option value="avif">AVIF</option>
+          </select>
+        </div>
+
+        <p id="run-error" class="opt-note run-error" hidden></p>
+        <button id="run-btn" class="primary" type="button">Convert images</button>
+
+        <div id="done-actions" class="done-actions" hidden>
+          <p id="summary" class="summary"></p>
+          <button id="zip-btn" class="primary" type="button">Download all (.zip)</button>
+          <button id="restart-btn" class="secondary" type="button">Start over</button>
+        </div>
+      </aside>
+    </section>
+
+    <p class="privacy">Images are processed in memory and are never stored on the server.</p>
+  </main>
+
+  <template id="file-row">
+    <li class="file">
+      <div class="thumb"><img alt="" /><span class="thumb-ext"></span></div>
+      <div class="file-info">
+        <p class="file-name"></p>
+        <p class="file-meta"></p>
+      </div>
+      <div class="file-status"></div>
+      <button class="remove" type="button" aria-label="Remove">&times;</button>
+    </li>
+  </template>
+
+  <script src="zip.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
