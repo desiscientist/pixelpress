@@ -1,0 +1,18 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: pixelpress
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true # redeploy on every push to main
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: TRUST_PROXY
+        value: "1"
+      # The free plan has 512 MB of memory: process one image at a time.
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"

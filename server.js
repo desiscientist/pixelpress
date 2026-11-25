@@ -2,10 +2,25 @@ const path = require('path');
 const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
+const helmet = require('helmet');
+const { rateLimit } = require('express-rate-limit');
 const { createReference } = require('./lib/similarity');
+
+const env = (name, fallback) => Number(process.env[name]) || fallback;
 
 const PORT = process.env.PORT || 3000;
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB per image
+// Largest image we will decode, in pixels. Guards against "decompression bombs": small
+// files that expand to gigabytes in memory. 50 MP covers 48 MP phone cameras.
+const MAX_PIXELS = env('MAX_PIXELS', 50_000_000);
+// Images processed at the same time. Each one can need a few hundred MB, so keep this
+// low on small servers. Further requests wait in a queue, up to MAX_QUEUED_JOBS.
+const MAX_CONCURRENT_JOBS = env('MAX_CONCURRENT_JOBS', 2);
+const MAX_QUEUED_JOBS = env('MAX_QUEUED_JOBS', 30);
+const RATE_LIMIT_PER_MINUTE = env('RATE_LIMIT_PER_MINUTE', 60);
+
+// Do not keep decoded images cached between requests.
+sharp.cache(false);
 
 const OUTPUT_FORMATS = {
   jpeg: { ext: 'jpg', mime: 'image/jpeg' },
@@ -209,6 +224,18 @@ function resizeOptions(body, meta, animated) {
   return { error: `Unknown fit "${fit}".` };
 }
 
+/** Pixel count that `options` will produce from an image of size `src`. */
+function estimateResizedPixels(options, src) {
+  const { width, height, fit, withoutEnlargement } = options;
+  if (fit === 'inside') {
+    let scale = Math.min(width ? width / src.width : Infinity, height ? height / src.height : Infinity);
+    if (withoutEnlargement) scale = Math.min(scale, 1);
+    return Math.round(src.width * scale) * Math.round(src.height * scale);
+  }
+  if (withoutEnlargement && fit === 'fill') return Math.min(width, src.width) * Math.min(height, src.height);
+  return width * height;
+}
+
 function outputName(originalName, ext) {
   const base = path.parse(originalName || 'image').name || 'image';
   return `${base}.${ext}`;
@@ -232,6 +259,14 @@ async function processImage(req, res, mode) {
     return res.status(415).json({ error: `Input format "${meta.format}" is not supported.` });
   }
 
+  const inputPixels = (meta.width || 0) * (meta.pageHeight || meta.height || 0) * (meta.pages || 1);
+  if (inputPixels > MAX_PIXELS) {
+    const mp = (n) => Math.round(n / 1e6);
+    return res.status(413).json({
+      error: `This image is too large (${mp(inputPixels)} megapixels). The limit is ${mp(MAX_PIXELS)} megapixels.`,
+    });
+  }
+
   const quality = clampInt(req.body.quality, 1, 100, 90);
   // Compress: a named level (visual target), or an exact custom quality when only `quality` is sent.
   const level = LEVELS[req.body.level] ? req.body.level : req.body.quality ? null : 'recommended';
@@ -252,6 +287,10 @@ async function processImage(req, res, mode) {
     const parsed = resizeOptions(req.body, meta, animated);
     if (parsed.error) return res.status(400).json({ error: parsed.error });
     resize = parsed.options;
+    const frames = animated ? meta.pages || 1 : 1;
+    if (estimateResizedPixels(resize, displaySize(meta)) * frames > MAX_PIXELS) {
+      return res.status(400).json({ error: 'The resized image would be too large. Try a smaller size.' });
+    }
   } else if (maxWidth || maxHeight) {
     resize = { width: maxWidth || null, height: maxHeight || null, fit: 'inside', withoutEnlargement: true };
   }
@@ -260,7 +299,7 @@ async function processImage(req, res, mode) {
   let qualityUsed = LOSSY_FORMATS.has(format) ? quality : undefined;
   let meetsTarget = true;
   try {
-    let pipeline = sharp(input, { animated }).rotate(); // apply EXIF orientation, then drop metadata
+    let pipeline = sharp(input, { animated, limitInputPixels: MAX_PIXELS }).rotate(); // apply EXIF orientation, then drop metadata
 
     if (resize) pipeline = pipeline.resize(resize);
 
@@ -324,13 +363,75 @@ async function processImage(req, res, mode) {
   return res.send(output);
 }
 
+// ---------- Job queue ----------
+// Limits how many images are processed at once. The slot is taken before the upload is
+// read, so queued requests wait with their upload still unread on the network rather
+// than buffered in memory.
+let activeJobs = 0;
+const waitingJobs = [];
+
+function acquireJobSlot() {
+  if (activeJobs < MAX_CONCURRENT_JOBS) {
+    activeJobs++;
+    return Promise.resolve();
+  }
+  if (waitingJobs.length >= MAX_QUEUED_JOBS) return null;
+  return new Promise((resolve) => waitingJobs.push(resolve));
+}
+
+function releaseJobSlot() {
+  const next = waitingJobs.shift();
+  if (next) next(); // hand the slot straight to the next request
+  else activeJobs--;
+}
+
+function jobSlot(req, res, next) {
+  const slot = acquireJobSlot();
+  if (!slot) {
+    return res.status(503).json({ error: 'The server is busy right now. Please try again in a minute.' });
+  }
+  let granted = false;
+  let closed = false;
+  res.on('close', () => {
+    closed = true;
+    if (granted) releaseJobSlot();
+  });
+  slot.then(() => {
+    granted = true;
+    if (closed) releaseJobSlot(); // the visitor left while waiting
+    else next();
+  });
+}
+
+// ---------- App ----------
+// Behind a hosting proxy (Render, Fly, etc.) set TRUST_PROXY=1 so rate limiting sees real visitor IPs.
+if (process.env.TRUST_PROXY) app.set('trust proxy', env('TRUST_PROXY', 1));
+
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: { 'img-src': ["'self'", 'data:', 'blob:'] }, // thumbnails are blob: URLs
+    },
+  })
+);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-app.post('/api/convert', upload.single('file'), (req, res) => processImage(req, res, 'convert'));
-app.post('/api/compress', upload.single('file'), (req, res) => processImage(req, res, 'compress'));
-app.post('/api/resize', upload.single('file'), (req, res) => processImage(req, res, 'resize'));
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: RATE_LIMIT_PER_MINUTE,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many images at once. Please wait a minute and try again.' },
+});
+
+for (const mode of ['convert', 'compress', 'resize']) {
+  app.post(`/api/${mode}`, apiLimiter, jobSlot, upload.single('file'), (req, res, next) =>
+    processImage(req, res, mode).catch(next)
+  );
+}
 
 // Upload errors (file too large, etc.)
 app.use((err, req, res, next) => {
@@ -347,4 +448,5 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`Pixelpress running at http://localhost:${PORT}`);
+  console.log(`Limits: ${MAX_CONCURRENT_JOBS} jobs at once, ${MAX_QUEUED_JOBS} queued, ${RATE_LIMIT_PER_MINUTE} requests/min per IP`);
 });

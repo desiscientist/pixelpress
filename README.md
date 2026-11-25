@@ -19,6 +19,22 @@ npm run dev      # restarts on server changes
 
 Set `PORT` to use a different port.
 
+## Deploy
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/desiscientist/pixelpress)
+
+`render.yaml` sets up a free Render web service that redeploys on every push to `main`. The free plan sleeps after 15 minutes without visits, so the first visit after that takes about a minute to wake up.
+
+Settings for a public server (environment variables):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MAX_CONCURRENT_JOBS` | 2 (1 on Render free) | Images processed at the same time. Others wait in a queue |
+| `MAX_QUEUED_JOBS` | 30 | Requests allowed to wait. Beyond this, visitors get "server busy" |
+| `RATE_LIMIT_PER_MINUTE` | 60 | Requests per minute per visitor IP |
+| `MAX_PIXELS` | 50000000 | Largest image (input or resized output) in pixels. Blocks decompression bombs |
+| `TRUST_PROXY` | off (1 on Render) | Set when running behind a proxy so rate limiting sees real IPs |
+
 ## API
 
 `POST /api/convert`, `POST /api/compress` and `POST /api/resize` take `multipart/form-data`:
